@@ -1,0 +1,53 @@
+FROM php:8.0-fpm-alpine as base-php-pfm
+
+RUN apk --no-cache add \
+        libaio \
+        libnsl \
+        libzip \
+        freetype \
+        libjpeg-turbo \
+        libldap \
+        git
+
+RUN apk --no-cache  --virtual .ext-build-deps add \
+        gcc \
+        libzip-dev \
+        freetype-dev \
+        libjpeg-turbo-dev \
+        openldap-dev \
+        pcre-dev ${PHPIZE_DEPS} && \
+     docker-php-ext-configure gd --with-freetype --with-jpeg && \
+     docker-php-ext-install -j$(nproc) ldap mysqli pdo_mysql gd zip exif && \
+     pecl install redis &&\
+     docker-php-ext-enable redis &&\
+     apk del .ext-build-deps
+
+RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+
+# зависимости php
+FROM base-php-pfm as deps-backend
+
+ADD ./composer.json /var/www/html/composer.json
+ADD ./composer.lock /var/www/html/composer.lock
+
+WORKDIR /var/www/html
+
+RUN composer install --no-scripts --no-autoloader
+
+# итоговый образ
+FROM base-php-pfm
+
+ADD . /var/www/html
+
+ADD --chown=www-data:www-data ./ /var/www/html
+COPY --from=deps-backend --chown=www-data:www-data /var/www/html/vendor /var/www/html/vendor
+
+WORKDIR /var/www/html
+
+USER www-data
+
+RUN composer dump-autoload && \
+    php artisan config:clear && \
+    php artisan storage:link
+
+EXPOSE 9000
